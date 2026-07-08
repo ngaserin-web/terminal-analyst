@@ -1,0 +1,57 @@
+name: Daily Analyst Refresh
+
+# Runs every day at 02:00 UTC = 09:00 GMT+7 (WIB).
+# Generates the analyst layer with Claude Code on your MAX plan (via the OAuth
+# token — NOT the paid API) and publishes it to your Worker. Fully cloud-based:
+# no personal machine needs to be on.
+on:
+  schedule:
+    - cron: "0 2 * * *"      # 02:00 UTC daily
+  workflow_dispatch: {}        # lets you run it on-demand from the Actions tab
+
+concurrency:
+  group: analyst-refresh
+  cancel-in-progress: false
+
+jobs:
+  publish-analyst:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      WORKER: https://intelligence-terminal.ngaserin.workers.dev
+    steps:
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Generate analyst JSON (Claude Code on MAX)
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          claude -p "Fetch ${WORKER}/api/data and read the live prices, tripwire current values, ETF flows (BTC/ETH/HYPE), FRED rates, Fear and Greed, and news headlines in it. Acting as a senior cross-asset analyst — probabilistic, risk-first, falsifiable, separating fact from interpretation and grounding every judgment in the live numbers you just fetched — write ONLY a JSON object (no prose, no markdown fences) to a file named analyst.json in the current directory, with EXACTLY these keys: {\"regime\":{\"label\":string,\"conviction\":\"LOW|MEDIUM|HIGH\",\"horizon\":string,\"thesis\":\"2-3 sentences\"},\"tripwires\":[{\"name\":string,\"level\":number_or_null,\"bind\":\"WTI|US10Y|US30Y|BTC|ETH|USDJPY\",\"dir\":\"above|below|above-good|event\",\"note\":string}],\"checklist\":[{\"name\":string,\"status\":\"on|partial|warn|off\",\"detail\":string}],\"calendar\":[{\"d\":\"YYYY-MM-DD\",\"ev\":string,\"imp\":\"low|med|high|critical\",\"note\":string}],\"scenarios\":[{\"name\":\"BASE — ...\" or \"BEAR — ...\" or \"BULL — ...\",\"p\":number,\"txt\":string}]}. Include 6-8 tripwires, 6-8 checklist items, 6-9 calendar events over the next ~3 weeks, and exactly 3 scenarios whose probabilities sum to 100." \
+            --allowedTools "WebFetch" "Write" "Bash" \
+            --dangerously-skip-permissions
+
+      - name: Validate & strip any fences
+        run: |
+          python3 - <<'EOF'
+          import json
+          s = open("analyst.json").read().replace("```json","").replace("```","")
+          a, b = s.find("{"), s.rfind("}")
+          obj = json.loads(s[a:b+1])
+          for k in ("regime","tripwires","checklist","calendar","scenarios"):
+              assert k in obj, f"missing key: {k}"
+          json.dump(obj, open("analyst.json","w"))
+          print("OK — keys:", list(obj.keys()),
+                "| scenarios sum:", sum(x.get("p",0) for x in obj["scenarios"]))
+          EOF
+
+      - name: Publish to Worker
+        env:
+          PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
+        run: |
+          code=$(curl -sS -o resp.json -w "%{http_code}" -X POST "${WORKER}/api/publish" \
+            -H "x-publish-token: ${PUBLISH_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data @analyst.json)
+          echo "HTTP $code"; cat resp.json
+          test "$code" = "200"
