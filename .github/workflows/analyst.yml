@@ -6,7 +6,13 @@ name: Daily Analyst Refresh
 # no personal machine needs to be on.
 on:
   schedule:
-    - cron: "0 2 * * *"      # 02:00 UTC daily
+    # GitHub's scheduler is best-effort and often skips/delays. Fire several times
+    # in the 09:00 GMT+7 window; the job is idempotent (each run overwrites), so
+    # whichever slot lands first wins and the rest are cheap no-op overwrites.
+    - cron: "0 2 * * *"    # 09:00 GMT+7
+    - cron: "20 2 * * *"   # 09:20 GMT+7 (catch-up)
+    - cron: "0 3 * * *"    # 10:00 GMT+7 (catch-up)
+    - cron: "0 4 * * *"    # 11:00 GMT+7 (final catch-up)
   workflow_dispatch: {}        # lets you run it on-demand from the Actions tab
 
 concurrency:
