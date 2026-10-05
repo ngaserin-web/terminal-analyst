@@ -6,20 +6,42 @@ name: Daily Analyst Refresh
 # no personal machine needs to be on.
 on:
   schedule:
-    # GitHub's scheduler is best-effort and often skips/delays. Fire several times
-    # in the 09:00 GMT+7 window; the job is idempotent (each run overwrites), so
-    # whichever slot lands first wins and the rest are cheap no-op overwrites.
-    - cron: "0 2 * * *"    # 09:00 GMT+7
-    - cron: "20 2 * * *"   # 09:20 GMT+7 (catch-up)
-    - cron: "0 3 * * *"    # 10:00 GMT+7 (catch-up)
-    - cron: "0 4 * * *"    # 11:00 GMT+7 (final catch-up)
+    # Kept as a backup, but GitHub's scheduler is unreliable — the Cloudflare
+    # Worker triggers this via repository_dispatch (reliable) as the primary path.
+    - cron: "0 2 * * *"    # 09:00 GMT+7 (backup)
+    - cron: "0 3 * * *"    # 10:00 GMT+7 (backup)
+  repository_dispatch:
+    types: [refresh-analyst]   # fired by the Cloudflare Worker, once daily
   workflow_dispatch: {}        # lets you run it on-demand from the Actions tab
 
 concurrency:
   group: analyst-refresh
   cancel-in-progress: false
 
+permissions:
+  contents: write   # lets the keepalive job push an empty commit
+
 jobs:
+  # Keepalive: GitHub disables scheduled workflows after 60 days of NO repo
+  # commits. The daily runs don't count as "commits", so without this the
+  # schedule silently dies (as it did Sep 7 -> Oct 5). This pushes a tiny empty
+  # commit on the 1st of each month, permanently resetting the 60-day clock.
+  keepalive:
+    if: github.event.schedule == '0 2 * * *' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Empty commit once a month to stay enabled
+        run: |
+          if [ "$(date -u +%d)" = "01" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            git config user.name "github-actions"
+            git config user.email "github-actions@users.noreply.github.com"
+            git commit --allow-empty -m "chore: keepalive to prevent 60-day workflow disable"
+            git push
+          else
+            echo "Not the 1st; skipping keepalive commit."
+          fi
+
   publish-analyst:
     runs-on: ubuntu-latest
     timeout-minutes: 10
