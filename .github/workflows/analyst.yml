@@ -42,6 +42,45 @@ jobs:
             echo "Not the 1st; skipping keepalive commit."
           fi
 
+  # Fetch US2Y + Fed funds target from FRED here (GitHub's IPs are NOT blocked by
+  # FRED, unlike Cloudflare's, which return HTTP 520) and publish to the Worker.
+  # Runs independently of the Claude analyst step so rates refresh even if that
+  # step fails. Needs secrets: FRED_API_KEY, PUBLISH_TOKEN.
+  publish-rates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      WORKER: https://intelligence-terminal.ngaserin.workers.dev
+    steps:
+      - name: Fetch FRED rates and publish to Worker
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
+        run: |
+          set -e
+          grab () {
+            curl -sS "https://api.stlouisfed.org/fred/series/observations?series_id=$1&api_key=${FRED_API_KEY}&file_type=json&sort_order=desc&limit=30" \
+              | python3 -c "import sys,json; o=[x for x in json.load(sys.stdin).get('observations',[]) if x['value'] not in ('.','')]; print(o[0]['value'] if o else '')"
+          }
+          US2Y=$(grab DGS2)
+          UPPER=$(grab DFEDTARU)
+          LOWER=$(grab DFEDTARL)
+          echo "US2Y=$US2Y UPPER=$UPPER LOWER=$LOWER"
+          python3 - <<EOF > rates.json
+          import json
+          def num(s):
+              try: return float(s)
+              except: return None
+          json.dump({"us2y":num("$US2Y"),"fedLower":num("$LOWER"),"fedUpper":num("$UPPER")}, open("rates.json","w"))
+          EOF
+          cat rates.json
+          code=$(curl -sS -o resp.json -w "%{http_code}" -X POST "${WORKER}/api/rates" \
+            -H "x-publish-token: ${PUBLISH_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data @rates.json)
+          echo "HTTP $code"; cat resp.json
+          test "$code" = "200"
+
   publish-analyst:
     runs-on: ubuntu-latest
     timeout-minutes: 10
