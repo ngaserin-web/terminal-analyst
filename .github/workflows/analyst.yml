@@ -84,6 +84,11 @@ jobs:
   publish-analyst:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Run after rates publish so US2Y + Fed target are already in the snapshot
+    # when the analyst fetches /api/data. 'always()' so a rates hiccup never
+    # blocks the analyst run.
+    needs: publish-rates
+    if: always()
     env:
       WORKER: https://intelligence-terminal.ngaserin.workers.dev
     steps:
@@ -94,7 +99,7 @@ jobs:
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
-          claude -p "Fetch ${WORKER}/api/data and read the live prices, tripwire current values, ETF flows (BTC/ETH/HYPE), FRED rates, Fear and Greed, and news headlines in it. Acting as a senior cross-asset analyst — probabilistic, risk-first, falsifiable, separating fact from interpretation and grounding every judgment in the live numbers you just fetched — write ONLY a JSON object (no prose, no markdown fences) to a file named analyst.json in the current directory, with EXACTLY these keys: {\"regime\":{\"label\":string,\"conviction\":\"LOW|MEDIUM|HIGH\",\"horizon\":string,\"thesis\":\"2-3 sentences\"},\"tripwires\":[{\"name\":string,\"level\":number_or_null,\"bind\":\"WTI|US10Y|US30Y|BTC|ETH|USDJPY\",\"dir\":\"above|below|above-good|event\",\"note\":string}],\"checklist\":[{\"name\":string,\"status\":\"on|partial|warn|off\",\"detail\":string}],\"calendar\":[{\"d\":\"YYYY-MM-DD\",\"ev\":string,\"imp\":\"low|med|high|critical\",\"note\":string}],\"scenarios\":[{\"name\":\"BASE — ...\" or \"BEAR — ...\" or \"BULL — ...\",\"p\":number,\"txt\":string}]}. Include 6-8 tripwires, 6-8 checklist items, 6-9 calendar events over the next ~3 weeks, and exactly 3 scenarios whose probabilities sum to 100." \
+          claude -p "Fetch ${WORKER}/api/data and read the live prices, tripwire current values, ETF flows (BTC/ETH/HYPE), FRED rates, Fear and Greed, and news headlines in it. Check which fields are actually present before judging data quality: the payload has prices{} (incl US2Y, US10Y, US30Y, BTC/ETH/SOL/XRP/HYPE), flows{BTC,ETH,HYPE arrays}, fed{target}, fng, and news[]. NEVER state a data source is missing, empty, or unavailable unless that field is literally null or an empty array in the JSON you fetched — if flows, crypto prices, fed target and US2Y are present, treat them as available and base conviction on signal agreement, not on a false claim of missing data. Acting as a senior cross-asset analyst — probabilistic, risk-first, falsifiable, separating fact from interpretation and grounding every judgment in the live numbers you just fetched — write ONLY a JSON object (no prose, no markdown fences) to a file named analyst.json in the current directory, with EXACTLY these keys: {\"regime\":{\"label\":string,\"conviction\":\"LOW|MEDIUM|HIGH\",\"horizon\":string,\"thesis\":\"2-3 sentences\"},\"tripwires\":[{\"name\":string,\"level\":number_or_null,\"bind\":\"WTI|US10Y|US30Y|BTC|ETH|USDJPY\",\"dir\":\"above|below|above-good|event\",\"note\":string}],\"checklist\":[{\"name\":string,\"status\":\"on|partial|warn|off\",\"detail\":string}],\"calendar\":[{\"d\":\"YYYY-MM-DD\",\"ev\":string,\"imp\":\"low|med|high|critical\",\"note\":string}],\"scenarios\":[{\"name\":\"BASE — ...\" or \"BEAR — ...\" or \"BULL — ...\",\"p\":number,\"txt\":string}]}. Include 6-8 tripwires, 6-8 checklist items, 6-9 calendar events over the next ~3 weeks, and exactly 3 scenarios whose probabilities sum to 100." \
             --allowedTools "WebFetch" "Write" "Bash" \
             --dangerously-skip-permissions
 
